@@ -10,10 +10,7 @@
 
 package org.example;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -155,9 +152,11 @@ public class Namespace extends ManagedNamespace {
         //addWindowSensor(rootNode);
         System.out.println(String.valueOf(getAPIData(1, "alarm")));
         //System.out.println("The id for Window sensor is " + getDeviceID("Window Sensor"));
-        getValue();
+        //getValue();
         addWindowSensor(rootNode);
+        addSmartplug(rootNode);
         nodeSubscription();
+        //sendData(true);
     }
 
     private void addStatic(UaFolderNode rootNode) {
@@ -320,22 +319,38 @@ public class Namespace extends ManagedNamespace {
         return json;
     }
 
-    private String getValue(){
-        JSONArray json = new JSONArray();
-        json = getAPIData(1, "alarm");
+    private void sendData(Boolean onOff) {
+        String PUT_URL = "http://gw-6d26.sandbox.tek.sdu.dk/ssapi/zb/dev/4/ldev/smartplug/data/onoff";
+        String json ="{\"value\": " + onOff + "}";
+        URL obj = null;
+        HttpURLConnection con = null;
+        int responseCode = 0;
+        try {
+            obj = new URL(PUT_URL);
+            con = (HttpURLConnection) obj.openConnection();
+            con.setRequestProperty("Content-Type", "application/json;");
+            con.setDoOutput(true);
+            con.setRequestMethod("PUT");
+            OutputStream output = con.getOutputStream();
+            output.write(json.getBytes());
+            output.close();
+            responseCode = con.getResponseCode();
+            System.out.println("PUT Response Code :: " + responseCode);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
 
-        /*
-        JSONObject jsonObject = new JSONObject();
-
-       json = (JSONArray) jsonObject.get("value");
-
-        System.out.println(String.valueOf(jsonObject));
-
-        Iterator<Object> it = json.iterator();
-            while(it.hasNext()){
-                System.out.println(it.next());
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                System.out.println("PUT SUCCESS");
+            } else {
+                System.out.println("PUT failed " + responseCode);
             }
-       */
+        }
+
+
+    private String getValue(int id, String key){
+        JSONArray json = new JSONArray();
+        json = getAPIData(id,key);
         return String.valueOf(json.getJSONObject(0).getBoolean("value"));
 
     }
@@ -385,12 +400,12 @@ public class Namespace extends ManagedNamespace {
 
         String name = "Window sensor";
         NodeId typeId = Identifiers.Boolean;
-        Variant variant = new Variant(Boolean.valueOf(getValue()));
+        Variant variant = new Variant(Boolean.valueOf(getValue(1, "alarm")));
 
         UaVariableNode node = new UaVariableNode.UaVariableNodeBuilder(getNodeContext())
                 .setNodeId(newNodeId("ICPS/nodeDevices/" + name))
-                .setAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.READ_WRITE)))
-                .setUserAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.READ_WRITE)))
+                .setAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.CurrentRead)))
+                .setUserAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.CurrentRead)))
                 .setBrowseName(newQualifiedName(name))
                 .setDisplayName(LocalizedText.english(name))
                 .setDataType(typeId)
@@ -415,47 +430,61 @@ public class Namespace extends ManagedNamespace {
     private void addMultiSensor(UaFolderNode rootNode){
 
     }
+
+    private void addSmartplug(UaFolderNode rootNode){
+        UaFolderNode scalarTypesFolder = new UaFolderNode(
+                getNodeContext(),
+                newNodeId("ICPS/nodeDevices"),
+                newQualifiedName("nodeDevices"),
+                LocalizedText.english("nodeDevices")
+        );
+
+        getNodeManager().addNode(scalarTypesFolder);
+        rootNode.addOrganizes(scalarTypesFolder);
+
+        String name = "Smart plug";
+        NodeId typeId = Identifiers.Boolean;
+        Variant variant = new Variant(Boolean.valueOf(getValue(4, "smartplug")));
+
+        UaVariableNode node = new UaVariableNode.UaVariableNodeBuilder(getNodeContext())
+                .setNodeId(newNodeId("ICPS/nodeDevices/" + name))
+                .setAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.CurrentRead, AccessLevel.CurrentWrite)))
+                .setUserAccessLevel(ubyte(AccessLevel.getMask(AccessLevel.CurrentRead, AccessLevel.CurrentWrite)))
+                .setBrowseName(newQualifiedName(name))
+                .setDisplayName(LocalizedText.english(name))
+                .setDataType(typeId)
+                .setTypeDefinition(Identifiers.BaseDataVariableType)
+                .build();
+
+        node.setValue(new DataValue(variant));
+
+        node.setAttributeDelegate(new ValueLoggingDelegate());
+
+        getNodeManager().addNode(node);
+        scalarTypesFolder.addOrganizes(node);
+    }
+
     private void nodeSubscription() {
-
-        List<EndpointDescription> endpoints = null;
-        try {
-            endpoints = DiscoveryClient.getEndpoints("opc.tcp://LAPTOP-IQ4MM1B6:12686/milo").get();
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        } catch (ExecutionException e) {
-            e.printStackTrace();
-        }
-
-        OpcUaClientConfigBuilder cfg = new OpcUaClientConfigBuilder();
-
-        /*Selecting the endpoint connection with Security Mode/Security Policy == "None"*/
-        for (int i = 0; i < endpoints.size(); i++) {
-            if(endpoints.get(i).getSecurityMode().name().equals("None")){
-                EndpointDescription configPoint = EndpointUtil.updateUrl(endpoints.get(i), "localhost", 12686);
-                cfg.setEndpoint(configPoint);
-                break;
-            }
-        }
-
-        OpcUaClient client = null;
-        try {
-            client = OpcUaClient.create(cfg.build());
-            client.connect().get();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        /* myVariable endpoint */
-        //NodeId nodeId  = NodeId.parse("ns=2;i=1002);
-        //NodeId nodeId  = new NodeId(3, 1008);
-
-
         new Thread(() -> {
-            String previousValue = getValue();
-            //System.out.println("thread is running");
-            while (true) {
-                if(previousValue.equals(getValue())){
+            String previousValue = getValue(1, "alarm");
 
+            // Window Sensor
+            NodeId windowNodeId  = new NodeId(2, "ICPS/nodeDevices/Window sensor");
+            UaVariableNode windowNode = (UaVariableNode) getNodeManager().get(windowNodeId);
+
+            // Smart plug
+            NodeId smartNodeId  = new NodeId(2, "ICPS/nodeDevices/Smart plug");
+            UaVariableNode smartplugNode = (UaVariableNode) getNodeManager().get(smartNodeId);
+
+            while (true) {
+                windowNode.setValue(new DataValue(new Variant(getValue(1,"alarm"))));
+                System.out.println("current value for smart plug " + smartplugNode.getValue());
+
+                if(smartplugNode.getValue().toString().contains("true")){
+                    sendData(true);
+                }
+                else if (smartplugNode.getValue().toString().contains("false")){
+                    sendData(false);
                 }
                 try {
                     Thread.sleep(1000);
@@ -466,7 +495,7 @@ public class Namespace extends ManagedNamespace {
 
         }).start();
     }
-    //System.out.println(client.writeValue(nodeId, DataValue.valueOnly(new Variant(2))).get());
+
 
 
 
